@@ -3,6 +3,7 @@
 
 # Log file
 *.log
+logs/
 
 # BlueJ files
 *.ctxt
@@ -29,9 +30,9 @@ target/
 .idea/*
 .idea/
 
-logs/
 *.settings/*
 .project
 .classpath
+
 metastore_db
 *.ipynb*

@@ -3,6 +3,8 @@ package org.xm.search;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.time.LocalDateTime;
+
 /**
  * Search:搜索服务工具包
  *
@@ -35,24 +37,24 @@ public class Search {
         /**
          * topN最大长度
          */
-        public static int topNMaxLength = 1000;
+        public static int TopNMaxLength = 1000;
         /**
          * 启用缓存
          */
-        public static boolean enableCache = true;
+        public static boolean EnableCache = true;
         /**
          * 缓存大小
          */
-        public static int cacheSize = 1000;
+        public static int CacheSize = 1000;
         /**
          * 短语文本路径
          */
-        public static String PharseTextPath = "/phrase-text.txt";
+        public static String PharseTextPath = "data/phrase-text.txt";
 
     }
 
 
     public static void main(String[] args) {
-        logger.debug("debug");
+        logger.debug("start at: " + LocalDateTime.now());
     }
 }
