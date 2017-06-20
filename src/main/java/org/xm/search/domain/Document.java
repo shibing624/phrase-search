@@ -1,6 +1,7 @@
 package org.xm.search.domain;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -40,6 +41,10 @@ public class Document implements Comparable {
 
     public Set<String> getTerms() {
         return terms;
+    }
+
+    public void addTerms(List<String> terms) {
+        this.terms.addAll(terms);
     }
 
     public void setTerms(Set<String> terms) {

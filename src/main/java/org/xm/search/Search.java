@@ -33,7 +33,7 @@ public class Search {
         /**
          * 搜索词长度限制
          */
-        public static int WordMaxLength = 30;
+        public static int SearchWordMaxLength = 30;
         /**
          * topN最大长度
          */

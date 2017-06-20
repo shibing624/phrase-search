@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
+ * 查询
+ *
  * @author XuMing
  */
 public class Query {
