@@ -286,7 +286,6 @@ public class PhraseSearcher {
         return query;
     }
 
-
     /**
      * 搜索核心方法
      *

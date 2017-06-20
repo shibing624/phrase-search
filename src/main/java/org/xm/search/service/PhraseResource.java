@@ -54,7 +54,4 @@ public class PhraseResource {
         return DOCUMENT_MAP;
     }
 
-    public static void main(String[] args) {
-        logger.info("count: " + DOCUMENT_MAP.size());
-    }
 }
