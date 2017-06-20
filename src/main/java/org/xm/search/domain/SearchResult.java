@@ -10,7 +10,7 @@ import java.util.List;
  */
 public class SearchResult {
     private List<Document> documents = new ArrayList<>();
-    private String flag = "unknown";
+    private String id = "unknown";
     private boolean overload;
 
     public List<Document> getDocuments() {
@@ -21,12 +21,12 @@ public class SearchResult {
         this.documents = documents;
     }
 
-    public String getFlag() {
-        return flag;
+    public String getId() {
+        return id;
     }
 
-    public void setFlag(String flag) {
-        this.flag = flag;
+    public void setId(String id) {
+        this.id = id;
     }
 
     public boolean isOverload() {

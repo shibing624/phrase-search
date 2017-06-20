@@ -10,11 +10,13 @@ import org.xm.search.domain.SearchResult;
 import org.xm.search.tokenizer.Tokenizer;
 import org.xm.search.util.ConcurrentLRUCache;
 import org.xm.search.util.TextUtil;
+import org.xm.search.util.TimeUtil;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
  * 短语文本搜索器
@@ -26,7 +28,7 @@ public class PhraseSearcher {
      * 日志组件
      */
     private static Logger logger = LogManager.getLogger();
-    private AtomicLong processSearchCount = new AtomicLong();
+    private AtomicLong currentProcessSearchCount = new AtomicLong();
     private static final int SEARCH_MAX_CONCURRENT = Search.Config.SearchMaxConcurrent;
     private Map<String, AtomicInteger> searchHistories = new ConcurrentHashMap<>();
     private Map<String, AtomicInteger> searchCountEveryDay = new ConcurrentHashMap<>();
@@ -101,7 +103,8 @@ public class PhraseSearcher {
                 .append("已经搜索次数：").append(searchCount.get()).append("\n")
                 .append("搜索最慢组件用时：").append(maxSearchTime.get()).append("\n")
                 .append("累计搜索时间：").append(totalSearchTime.get()).append("\n")
-                .append("搜索时间占比：").append(totalSearchTime.get() / (float) (System.currentTimeMillis() - searchServiceStartupTime) * 100).append("%\n")
+                .append("搜索时间占比：").append(totalSearchTime.get() / (float) (System.currentTimeMillis() -
+                searchServiceStartupTime) * 100).append("%\n")
                 .append("搜索词长度限制：").append(SEARCH_WORD_MAX_LENGTH).append("\n")
                 .append("topN长度限制：").append(TOPN_MAX_LENGTH).append("\n");
         status.append("每日搜索次数统计：\n");
@@ -240,6 +243,12 @@ public class PhraseSearcher {
         return sb.toString();
     }
 
+    /**
+     * 根据关键词取Query解析结果
+     *
+     * @param keywords 关键词
+     * @return Query
+     */
     public Query parse(String keywords) {
         Query query = new Query();
         if (StringUtils.isBlank(keywords)) {
@@ -267,8 +276,198 @@ public class PhraseSearcher {
                     terms.add(term);
                 }
             }
-//            query.addKeywordTerms();
+            query.addKeywordTerms(terms);
+            return query;
+        }
+        if (!query.hasPinyin() || isAllUpperCase) {
+            List<String> keywordTerms = Tokenizer.segment(keywords);
+            query.addKeywordTerms(keywordTerms);
         }
         return query;
+    }
+
+
+    public SearchResult search(String keywords, int topN, boolean highlight) {
+        if (searchHistories.size() > 1000) {
+            searchHistories.clear();
+        }
+        searchHistories.putIfAbsent(keywords, new AtomicInteger());
+        searchHistories.get(keywords).incrementAndGet();
+
+        String key = TimeUtil.toString(System.currentTimeMillis(), "yyyyMMdd");
+        searchCountEveryDay.putIfAbsent(key, new AtomicInteger());
+        searchCountEveryDay.get(key).incrementAndGet();
+
+        String identity = searchCount.incrementAndGet() + "-" + SEARCH_MAX_CONCURRENT;
+        // 控制并发请求数量
+        if (currentProcessSearchCount.incrementAndGet() > SEARCH_MAX_CONCURRENT) {
+            SearchResult searchResult = new SearchResult();
+            searchResult.setOverload(true);
+            logger.info("并发降级，当前并发请求数量：{} 超过系统预设能承受的负载：{} {}",
+                    currentProcessSearchCount.get(), SEARCH_MAX_CONCURRENT, identity);
+            currentProcessSearchCount.decrementAndGet();
+            return searchResult;
+        }
+        // 缓存
+        String cacheKey = keywords + "_" + topN + "_" + highlight;
+        if (cacheEnabled) {
+            SearchResult result = cache.get(cacheKey);
+            if (result != null) {
+                logger.info("搜索命中缓存：{}，topN：{}，highlight：{} {}", keywords, topN, highlight, identity);
+                currentProcessSearchCount.decrementAndGet();
+                return result;
+            }
+        }
+        SearchResult searchResult = new SearchResult();
+        searchResult.setId(identity);
+        if (topN > TOPN_MAX_LENGTH) {
+            logger.warn("topN：{} 大于 {}，限制为{} {}", topN, TOPN_MAX_LENGTH, TOPN_MAX_LENGTH, identity);
+            topN = TOPN_MAX_LENGTH;
+        }
+        logger.info("搜索关键词：{}，topN：{}，highlight：{} {}", keywords, topN, highlight, identity);
+        long start = System.currentTimeMillis();
+        Query query = parse(keywords);
+        long cost = System.currentTimeMillis() - start;
+        totalSearchTime.addAndGet(cost);
+        if (maxSearchTime.get() < cost) {
+            maxSearchTime.set(cost);
+        }
+        logger.info("{} 查询解析耗时：{} {}", cost, TimeUtil.getTimeDes(cost), identity);
+        if (query.isEmpty()) {
+            currentProcessSearchCount.decrementAndGet();
+            return searchResult;
+        }
+        logger.info("查询结构：{} {}", query.getKeywordTerms(), identity);
+
+        start = System.currentTimeMillis();
+        Map<Integer, AtomicInteger> hits = new ConcurrentHashMap<>();
+        // 收集并初始化文档分数
+        query.getKeywordTerms().parallelStream().forEach(keywordTerm -> {
+            Set<Integer> indexIds = INVERTED_INDEX.get(keywordTerm);
+            if (indexIds != null) {
+                Set<Integer> deletedIndexIds = new HashSet<>();
+                for (int indexId : indexIds) {
+                    Integer documentId = INDEX_TO_DOCUMENT.get(indexId);
+                    if (documentId == null) {
+                        deletedIndexIds.add(indexId);
+                        continue;
+                    }
+                    Document document = DOCUMENT.get(documentId);
+                    if (document != null) {
+                        hits.putIfAbsent(documentId, new AtomicInteger());
+                        hits.get(documentId).addAndGet(keywordTerm.length());
+                    } else {
+                        logger.error("没有ID是：{} 的文档 {}", documentId, identity);
+                    }
+                }
+                indexIds.removeAll(deletedIndexIds);
+            }
+        });
+        // 限制文档数
+        int limitedDocCount = topN * 10 < 1000 ? 1000 : topN * 10;
+        Map<Integer, AtomicInteger> limitedDocs = new ConcurrentHashMap<>();
+        hits.entrySet().parallelStream()
+                .sorted((a, b) -> b.getValue().intValue() - a.getValue().intValue())
+                .limit(limitedDocCount)
+                .forEach(i -> limitedDocs.put(i.getKey(), i.getValue()));
+        cost = System.currentTimeMillis() - start;
+        totalSearchTime.addAndGet(cost);
+        if (maxSearchTime.get() < cost) {
+            maxSearchTime.set(cost);
+        }
+        logger.info("{} 搜索耗时：{} {}", cost, TimeUtil.getTimeDes(cost), identity);
+        logger.info("搜索到的结果文档数：{}，总的文档数：{}，搜索结果占总文档的比例：{} %，限制后的搜索结果数：{}，"
+                        + "限制后的搜索结果占总文档的比例：{} % {}",
+                hits.size(), DOCUMENT.size(), hits.size() / (float) DOCUMENT.size() * 100, limitedDocs.size(),
+                limitedDocs.size() / (float) DOCUMENT.size() * 100, identity);
+        start = System.currentTimeMillis();
+        String finalKeywords = keywords.trim().toLowerCase();
+        // 文档得分
+        Map<Integer, Integer> scores = new ConcurrentHashMap<>();
+        limitedDocs.entrySet().parallelStream().forEach(i -> {
+            int documentId = i.getKey();
+            int score = i.getValue().get();
+            Document doc = DOCUMENT.get(documentId);
+            String value = doc.getValue();
+            if (finalKeywords.equals(value.trim().toLowerCase())
+                    || TextUtil.normalize(finalKeywords).equals(TextUtil.normalize(value))) {
+                score += value.length();
+            }
+            if (TextUtil.isAllNonChinese(keywords) && !query.hasPinyin()) {
+                int param = finalKeywords.length() - value.length();
+                if (param != 0) {
+                    score += param;
+                }
+            }
+            if (TextUtil.isAllNonChinese(keywords)) {
+                String chineseValue = TextUtil.extractChinese(value);
+                String acronymPinyin = Tokenizer.getPinyin(chineseValue, "", true);
+                String fullPinyin = Tokenizer.getPinyin(chineseValue, "", false);
+                if (finalKeywords.equals(acronymPinyin)) {
+                    score += finalKeywords.length();
+                }
+                if (finalKeywords.equals(fullPinyin)) {
+                    score += finalKeywords.length();
+                }
+            }
+            scores.put(documentId, score);
+        });
+
+        cost = System.currentTimeMillis() - start;
+        totalSearchTime.addAndGet(cost);
+        if (maxSearchTime.get() < cost) {
+            maxSearchTime.set(cost);
+        }
+        logger.info("{} 评分耗时：{} {}", cost, TimeUtil.getTimeDes(cost), identity);
+        start = System.currentTimeMillis();
+
+        // 排序并限制文档数
+        List<Document> result = scores.entrySet().parallelStream()
+                .map(i -> {
+                    Document document = DOCUMENT.get(i.getKey()).clone();
+                    document.setScore(i.getValue().intValue());
+                    return document;
+                })
+                .sorted((a, b) -> {
+                    int temp = b.getScore() - a.getScore();
+                    if (temp == 0) {
+                        temp = Long.valueOf(a.getId()).compareTo(Long.valueOf(b.getId()));
+                    }
+                    return temp;
+                })
+                .limit(topN).collect(Collectors.toList());
+        cost = System.currentTimeMillis() - start;
+        totalSearchTime.addAndGet(cost);
+        if (maxSearchTime.get() < cost) {
+            maxSearchTime.set(cost);
+        }
+        logger.info("{} 排序耗时：{} {}", cost, TimeUtil.getTimeDes(cost), identity);
+        if (highlight && !TextUtil.isAllNonChinese(keywords)) {
+            // 高亮
+            start = System.currentTimeMillis();
+            highlight(result, keywords, query.getKeywordTerms());
+            cost = System.currentTimeMillis() - start;
+            totalSearchTime.addAndGet(cost);
+            if (maxSearchTime.get() < cost) {
+                maxSearchTime.set(cost);
+            }
+            logger.info("{} 高亮耗时：{} {}", TimeUtil.getTimeDes(cost), identity);
+        }
+        searchResult.setDocuments(result);
+        currentProcessSearchCount.decrementAndGet();
+        if (cacheEnabled) {
+            cache.put(cacheKey, searchResult);
+        }
+        return searchResult;
+    }
+
+    public static void main(String[] args) {
+        PhraseSearcher searcher = new PhraseSearcher();
+        searcher.index(PhraseResource.loadPhraseText());
+
+        AtomicInteger i = new AtomicInteger();
+        searcher.search("阿里", 500, true)
+                .getDocuments()
+                .forEach(doc -> System.out.println(i.incrementAndGet() + ". " + doc.getValue() + " " + " (" + doc.getScore() + ")"));
     }
 }
