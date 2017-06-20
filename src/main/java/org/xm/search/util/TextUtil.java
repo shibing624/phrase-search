@@ -54,7 +54,7 @@ public class TextUtil {
         return true;
     }
 
-    public static boolean isEnglish(String text) {
+    public static boolean isAllEnglish(String text) {
         boolean english = true;
         for (char c : text.toCharArray()) {
             if (!isEnglish(c)) {
@@ -86,7 +86,7 @@ public class TextUtil {
             }
         }
         if (text.length() != result.length()) {
-            logger.debug("规范化处理，仅仅保留中英文字符和数字，规范化之前：{}，规范化之后：{}", text, result.toString());
+            logger.debug("规范化处理，(仅仅保留中英文字符和数字)。规范化之前：{}，规范化之后：{}", text, result.toString());
         }
         return result.toString().toLowerCase();
     }

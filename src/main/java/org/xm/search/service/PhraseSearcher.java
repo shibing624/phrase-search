@@ -287,6 +287,14 @@ public class PhraseSearcher {
     }
 
 
+    /**
+     * 搜索核心方法
+     *
+     * @param keywords  关键词
+     * @param topN      搜索词前N个
+     * @param highlight 是否高亮
+     * @return SearchResult
+     */
     public SearchResult search(String keywords, int topN, boolean highlight) {
         if (searchHistories.size() > 1000) {
             searchHistories.clear();

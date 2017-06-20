@@ -131,11 +131,13 @@ public class ConcurrentLRUCache<K, V> {
     }
 
     public static void main(String[] args) {
-        ConcurrentLRUCache<Integer, Integer> cache = new ConcurrentLRUCache<>(4);
+        ConcurrentLRUCache<Integer, Integer> cache = new ConcurrentLRUCache<>(5);
         for (int i = 0; i < 9; i++) {
             cache.put(i, i);
-            for (int j = 0; j < i + 2; j++) {
-                cache.get(i);
+            if (i % 2 == 0) {
+                for (int j = 0; j < i + 2; j++) {
+                    cache.get(i);
+                }
             }
         }
         System.out.println(cache.getStatus());
