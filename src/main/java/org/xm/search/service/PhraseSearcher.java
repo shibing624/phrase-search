@@ -12,6 +12,7 @@ import org.xm.search.util.ConcurrentLRUCache;
 import org.xm.search.util.TextUtil;
 import org.xm.search.util.TimeUtil;
 
+import java.io.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -28,19 +29,40 @@ public class PhraseSearcher {
      * 日志组件
      */
     private static Logger logger = LogManager.getLogger();
+    /**
+     * 当前并发搜索次数
+     */
     private AtomicLong currentProcessSearchCount = new AtomicLong();
+    /**
+     * 最大并发搜索次数
+     */
     private static final int SEARCH_MAX_CONCURRENT = Search.Config.SearchMaxConcurrent;
     private Map<String, AtomicInteger> searchHistories = new ConcurrentHashMap<>();
     private Map<String, AtomicInteger> searchCountEveryDay = new ConcurrentHashMap<>();
+    /**
+     * 索引ID
+     */
     private AtomicInteger indexIdGenerator = new AtomicInteger();
+    /**
+     * 倒排索引
+     */
     private Map<String, Set<Integer>> INVERTED_INDEX = new ConcurrentHashMap<>();
+    /**
+     * 索引到文档
+     */
     private Map<Integer, Integer> INDEX_TO_DOCUMENT = new ConcurrentHashMap<>();
+    /**
+     * 文档到索引
+     */
     private Map<Integer, Integer> DOCUMENT_TO_INDEX = new ConcurrentHashMap<>();
+    /**
+     * 文档集
+     */
     private Map<Integer, Document> DOCUMENT = new ConcurrentHashMap<>();
+    /**
+     * 索引时间，毫秒
+     */
     private AtomicLong indexTotalCost = new AtomicLong();
-
-    private Set<String> charPinyin = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    private int charMaxPinyinLength = 0;
     /**
      * 前缀
      */
@@ -98,7 +120,6 @@ public class PhraseSearcher {
         INDEX_TO_DOCUMENT.clear();
         DOCUMENT_TO_INDEX.clear();
         DOCUMENT.clear();
-        charPinyin.clear();
     }
 
     /**
@@ -106,10 +127,81 @@ public class PhraseSearcher {
      */
     public void saveIndex() {
         long start = System.currentTimeMillis();
-//        saveInvertIndex(INVERTED_INDEX);
-//        saveIndexIdDocumentIdMapping(INDEX_TO_DOCUMENT);
-//        saveDocument(DOCUMENT);
-        logger.info("保存索引耗时：{}", System.currentTimeMillis() - start);
+        saveInvertIndex(INVERTED_INDEX);
+        saveIndexIdDocumentIdMapping(INDEX_TO_DOCUMENT);
+        saveDocument(DOCUMENT);
+        logger.info("保存索引耗时：{}", TimeUtil.getTimeDes(System.currentTimeMillis() - start));
+    }
+
+    /**
+     * 保存倒排索引
+     *
+     * @param invertIndex 倒排索引map
+     */
+    private void saveInvertIndex(Map<String, Set<Integer>> invertIndex) {
+        String path = Search.Config.InvertIndexTextPath;
+        try {
+            BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(path), "UTF-8"));
+            invertIndex.entrySet().stream().sorted((a, b) -> b.getValue().size() - a.getValue().size()).forEach(i -> {
+                StringBuilder sb = new StringBuilder();
+                i.getValue().stream().sorted().forEach(k -> sb.append(k).append(" "));
+                try {
+                    bw.write(i.getKey() + "=" + sb.toString() + "\n");
+                } catch (IOException e) {
+                    logger.error("文件出错" + e);
+                }
+            });
+            bw.close();
+        } catch (FileNotFoundException e) {
+            logger.error("文件找不到，文件路径" + path + e.getMessage());
+        } catch (UnsupportedEncodingException e) {
+            logger.error("文件编码不支持", e);
+        } catch (Exception e) {
+            logger.error("文件错误", e);
+        }
+    }
+
+    /**
+     * 保存索引ID与文档ID的对应关系
+     *
+     * @param map 文档map
+     */
+    private void saveIndexIdDocumentIdMapping(Map<Integer, Integer> map) {
+        String path = Search.Config.InvertIdToDocumentIdTextPath;
+        try {
+            BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(path)));
+            map.keySet().stream().sorted().forEach(indexId -> {
+                try {
+                    bw.write(indexId + "=" + map.get(indexId) + "\n");
+                } catch (IOException e) {
+                    logger.error("文件出错", e);
+                }
+            });
+            bw.close();
+        } catch (Exception e) {
+            logger.error("保存文件出错，文件路径：" + path + e.getMessage());
+        }
+    }
+
+    private void saveDocument(Map<Integer, Document> documentMap) {
+        String path = Search.Config.DocumentTextPath;
+        try {
+            BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(path)));
+            documentMap.keySet().stream().sorted().forEach(documentId -> {
+                Document document = documentMap.get(documentId);
+                StringBuilder sb = new StringBuilder();
+                sb.append(document.getValue());
+                try {
+                    bw.write(documentId + "=" + sb.toString() + "\n");
+                    bw.flush();
+                } catch (IOException e) {
+                    logger.error("文件出错", e);
+                }
+            });
+            bw.close();
+        } catch (Exception e) {
+            logger.error("保存文件出错，文件路径：" + path + e.getMessage());
+        }
     }
 
     public String getKeyAndHitCount() {
@@ -144,8 +236,7 @@ public class PhraseSearcher {
         StringBuilder status = new StringBuilder();
         status.append("索引文档数：").append(DOCUMENT.size()).append("\n")
                 .append("索引用时：").append(indexTotalCost.get()).append("\n")
-                .append("词数：").append(INVERTED_INDEX.size()).append("\n")
-                .append("最长拼音字母数：").append(charMaxPinyinLength).append("\n");
+                .append("词数：").append(INVERTED_INDEX.size()).append("\n");
         return status.toString();
     }
 

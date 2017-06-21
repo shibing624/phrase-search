@@ -50,7 +50,18 @@ public class Search {
          * 短语文本路径
          */
         public static String PharseTextPath = "data/phrase-text.txt";
-
+        /**
+         *
+         */
+        public static String InvertIndexTextPath = "data/invert-index.txt";
+        /**
+         *
+         */
+        public static String InvertIdToDocumentIdTextPath = "data/index-id-to-document-id.txt";
+        /**
+         * 文档保存路径
+         */
+        public static String DocumentTextPath = "data/document.txt";
     }
 
 

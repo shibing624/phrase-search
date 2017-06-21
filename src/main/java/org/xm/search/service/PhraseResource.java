@@ -13,7 +13,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 数据辅助类
+ * 短语加载类
  *
  * @author XuMing
  */
