@@ -35,7 +35,7 @@ public class Search {
          */
         public static int SearchWordMaxLength = 30;
         /**
-         * topN最大长度
+         * topN最大值
          */
         public static int TopNMaxLength = 1000;
         /**

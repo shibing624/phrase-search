@@ -41,12 +41,22 @@ public class PhraseSearcher {
 
     private Set<String> charPinyin = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private int charMaxPinyinLength = 0;
-
-    private static final String PREIX = Search.Config.HighLightPrefix;
+    /**
+     * 前缀
+     */
+    private static final String PREFIX = Search.Config.HighLightPrefix;
+    /**
+     * 后缀
+     */
     private static final String SUFFIX = Search.Config.HighLightSuffix;
-
+    /**
+     * 搜索词最大长度
+     */
     private static final int SEARCH_WORD_MAX_LENGTH = Search.Config.SearchWordMaxLength;
-    private static final int TOPN_MAX_LENGTH = Search.Config.TopNMaxLength;
+    /**
+     * topN最大值
+     */
+    private static final int TOP_N_MAX_LENGTH = Search.Config.TopNMaxLength;
     private AtomicInteger searchCount = new AtomicInteger();
     private AtomicLong maxSearchTime = new AtomicLong();
     private AtomicLong totalSearchTime = new AtomicLong();
@@ -55,19 +65,30 @@ public class PhraseSearcher {
     private boolean cacheEnabled = Search.Config.EnableCache;
     private ConcurrentLRUCache<String, SearchResult> cache = null;
 
+    /**
+     * 短语搜索器
+     *
+     * @param cacheEnabled 启用缓存
+     */
     public PhraseSearcher(boolean cacheEnabled) {
         this.cacheEnabled = cacheEnabled;
         if (cacheEnabled) {
             cache = new ConcurrentLRUCache<>(Search.Config.CacheSize);
         }
         logger.info("搜索词长度限制：{}", SEARCH_WORD_MAX_LENGTH);
-        logger.info("TopN长度限制：{}", TOPN_MAX_LENGTH);
+        logger.info("TopN长度限制：{}", TOP_N_MAX_LENGTH);
     }
 
+    /**
+     * 短语搜索器，默认启用缓存
+     */
     public PhraseSearcher() {
         this(true);
     }
 
+    /**
+     * 清空
+     */
     public void clear() {
         if (cacheEnabled) {
             cache.clear();
@@ -80,6 +101,9 @@ public class PhraseSearcher {
         charPinyin.clear();
     }
 
+    /**
+     * 保存索引
+     */
     public void saveIndex() {
         long start = System.currentTimeMillis();
 //        saveInvertIndex(INVERTED_INDEX);
@@ -106,7 +130,7 @@ public class PhraseSearcher {
                 .append("搜索时间占比：").append(totalSearchTime.get() / (float) (System.currentTimeMillis() -
                 searchServiceStartupTime) * 100).append("%\n")
                 .append("搜索词长度限制：").append(SEARCH_WORD_MAX_LENGTH).append("\n")
-                .append("topN长度限制：").append(TOPN_MAX_LENGTH).append("\n");
+                .append("topN长度限制：").append(TOP_N_MAX_LENGTH).append("\n");
         status.append("每日搜索次数统计：\n");
         searchCountEveryDay.keySet().stream()
                 .sorted(Comparator.reverseOrder())
@@ -125,6 +149,11 @@ public class PhraseSearcher {
         return status.toString();
     }
 
+    /**
+     * 对文档集建立索引
+     *
+     * @param documentMap 文档集
+     */
     public void index(Map<Integer, Document> documentMap) {
         long start = System.currentTimeMillis();
         documentMap.values().parallelStream().forEach(document -> {
@@ -139,10 +168,25 @@ public class PhraseSearcher {
         logger.info(getIndexStatus());
     }
 
+    /**
+     * 单文档索引
+     *
+     * @param document
+     */
     private void indexSingle(Document document) {
         deleteOldIndexIfExist(document.getId());
         int indexId = indexIdGenerator.incrementAndGet();
+        // 分词的词名称加入索引
         List<String> terms = Tokenizer.segment(document.getValue());
+        // 拼音结果加入索引
+        List<String> pinyins = new ArrayList<>();
+        for (String term : terms) {
+            // 简拼（拼音头）
+            pinyins.add(Tokenizer.getPinyin(term, "", true));
+            // 全拼
+            pinyins.add(Tokenizer.getPinyin(term, "", false));
+        }
+        terms.addAll(pinyins);
         document.addTerms(terms);
         for (String term : terms) {
             INVERTED_INDEX.putIfAbsent(term, Collections.newSetFromMap(new ConcurrentHashMap<>()));
@@ -153,12 +197,22 @@ public class PhraseSearcher {
         DOCUMENT.put(document.getId(), document);
     }
 
+    /**
+     * 新建索引
+     *
+     * @param document
+     */
     public void createIndex(Document document) {
         long start = System.currentTimeMillis();
         indexSingle(document);
         indexTotalCost.addAndGet(System.currentTimeMillis() - start);
     }
 
+    /**
+     * 删除索引
+     *
+     * @param documentId
+     */
     public void deleteIndex(int documentId) {
         if (deleteOldIndexIfExist(documentId)) {
             logger.debug("文档索引删除成功，ID:{}", documentId);
@@ -167,22 +221,41 @@ public class PhraseSearcher {
         }
     }
 
+    /**
+     * 更新索引
+     *
+     * @param document
+     */
     public void updateIndex(Document document) {
         long start = System.currentTimeMillis();
         indexSingle(document);
         indexTotalCost.addAndGet(System.currentTimeMillis() - start);
     }
 
+    /**
+     * 批量文档高亮
+     *
+     * @param documents
+     * @param keywords
+     * @param keywordTerms
+     */
     public void highlight(List<Document> documents, String keywords, List<String> keywordTerms) {
         for (Document document : documents) {
             highlight(document, keywords, keywordTerms);
         }
     }
 
+    /**
+     * 文档高亮
+     *
+     * @param document
+     * @param keywords
+     * @param keywordTerms
+     */
     public void highlight(Document document, String keywords, List<String> keywordTerms) {
         String val = document.getValue();
         if (val.contains(keywords)) {
-            document.setValue(val.replace(keywords, PREIX + keywords + SUFFIX));
+            document.setValue(val.replace(keywords, PREFIX + keywords + SUFFIX));
             return;
         }
         Collections.sort(keywordTerms, (a, b) -> b.length() - a.length());
@@ -195,7 +268,7 @@ public class PhraseSearcher {
             int index = val.indexOf(keywordTerm);
             if (index > -1) {
                 highlight = true;
-                val = val.replace(keywordTerm, PREIX + keywordTerm + SUFFIX);
+                val = val.replace(keywordTerm, PREFIX + keywordTerm + SUFFIX);
                 if (StringUtils.isBlank(last)) {
                     last = keywordTerm;
                 }
@@ -222,24 +295,26 @@ public class PhraseSearcher {
         searchHistories.clear();
     }
 
+    /**
+     * 取搜索历史记录
+     *
+     * @return
+     */
     public String getSearchHistories() {
         StringBuilder sb = new StringBuilder();
         AtomicInteger i = new AtomicInteger();
-        searchHistories.entrySet().stream()
-                .sorted((a, b) -> {
-                    int c = b.getValue().get() - a.getValue().get();
-                    if (c == 0) {
-                        c = a.getKey().compareTo(b.getKey());
-                    }
-                    return c;
-                })
-                .forEach(e ->
-                        sb.append(i.incrementAndGet())
-                                .append("\t")
-                                .append(e.getKey())
-                                .append("\t")
-                                .append(e.getValue().get())
-                                .append("\n"));
+        searchHistories.entrySet().stream().sorted((a, b) -> {
+            int c = b.getValue().get() - a.getValue().get();
+            if (c == 0) {
+                c = a.getKey().compareTo(b.getKey());
+            }
+            return c;
+        }).forEach(e -> sb.append(i.incrementAndGet())
+                .append("\t")
+                .append(e.getKey())
+                .append("\t")
+                .append(e.getValue().get())
+                .append("\n"));
         return sb.toString();
     }
 
@@ -265,7 +340,7 @@ public class PhraseSearcher {
             keywords = keywords.substring(0, SEARCH_WORD_MAX_LENGTH);
             logger.warn("搜索词长度大于：{}，将搜索词：{} 截短为：{}", SEARCH_WORD_MAX_LENGTH, temp, keywords);
         }
-        if (TextUtil.isAllNonChinese(keywords) && (keywords.contains(" ") || keywords.contains("'"))) {
+        if (TextUtil.isAllNonChinese(keywords) || keywords.contains("'")) {
             List<String> terms = new ArrayList<>();
             if (keywords.contains("'")) {
                 for (String term : keywords.split("'")) {
@@ -308,13 +383,9 @@ public class PhraseSearcher {
         String identity = searchCount.incrementAndGet() + "-" + SEARCH_MAX_CONCURRENT;
         // 控制并发请求数量
         if (currentProcessSearchCount.incrementAndGet() > SEARCH_MAX_CONCURRENT) {
-            SearchResult searchResult = new SearchResult();
-            searchResult.setOverload(true);
-            logger.info("并发降级，当前并发请求数量：{} 超过系统预设能承受的负载：{} {}",
-                    currentProcessSearchCount.get(), SEARCH_MAX_CONCURRENT, identity);
-            currentProcessSearchCount.decrementAndGet();
-            return searchResult;
+            return handleOverload(identity);
         }
+
         // 缓存
         String cacheKey = keywords + "_" + topN + "_" + highlight;
         if (cacheEnabled) {
@@ -327,9 +398,9 @@ public class PhraseSearcher {
         }
         SearchResult searchResult = new SearchResult();
         searchResult.setId(identity);
-        if (topN > TOPN_MAX_LENGTH) {
-            logger.warn("topN：{} 大于 {}，限制为{} {}", topN, TOPN_MAX_LENGTH, TOPN_MAX_LENGTH, identity);
-            topN = TOPN_MAX_LENGTH;
+        if (topN > TOP_N_MAX_LENGTH) {
+            logger.warn("topN：{} 大于 {}，限制为{} {}", topN, TOP_N_MAX_LENGTH, TOP_N_MAX_LENGTH, identity);
+            topN = TOP_N_MAX_LENGTH;
         }
         logger.info("搜索关键词：{}，topN：{}，highlight：{} {}", keywords, topN, highlight, identity);
         long start = System.currentTimeMillis();
@@ -344,7 +415,7 @@ public class PhraseSearcher {
             currentProcessSearchCount.decrementAndGet();
             return searchResult;
         }
-        logger.info("查询结构：{} {}", query.getKeywordTerms(), identity);
+        logger.info("查询结果：{} {}", query.getKeywordTerms(), identity);
 
         start = System.currentTimeMillis();
         Map<Integer, AtomicInteger> hits = new ConcurrentHashMap<>();
@@ -466,6 +537,32 @@ public class PhraseSearcher {
             cache.put(cacheKey, searchResult);
         }
         return searchResult;
+    }
+
+    /**
+     * 并发降级
+     *
+     * @param identity
+     * @return
+     */
+    private SearchResult handleOverload(String identity) {
+        SearchResult searchResult = new SearchResult();
+        searchResult.setOverload(true);
+        logger.info("并发降级，当前并发请求数量：{} 超过系统预设能承受的负载：{} {}",
+                currentProcessSearchCount.get(), SEARCH_MAX_CONCURRENT, identity);
+        currentProcessSearchCount.decrementAndGet();
+        return searchResult;
+    }
+
+    /**
+     * 搜索方法
+     *
+     * @param keywords 关键词
+     * @param topN     搜索词前N个
+     * @return SearchResult 结果高亮显示
+     */
+    public SearchResult search(String keywords, int topN) {
+        return search(keywords, topN, true);
     }
 
     public static void main(String[] args) {
