@@ -44,13 +44,45 @@ public class PhraseSearcherTest {
         Document document = new Document();
         document.setId(-100);
         document.setValue("哈利波特魔法屋");
-
+        // 创建索引
         searcher.createIndex(document);
         searcher.saveIndex();
 
         actualValue = searcher.search("哈利波特魔法屋", 1, false).getDocuments();
         System.out.println(actualValue);
         assertEquals(1, actualValue.size());
+
+        // 删除索引
+        searcher.deleteIndex(document.getId());
+        actualValue = searcher.search("哈利波特魔法屋", 1, false).getDocuments();
+        assertEquals(0, actualValue.size());
+
+    }
+
+    /**
+     * 单独执行
+     *
+     * @throws Exception
+     */
+    @Test
+    public void search3() throws Exception {
+        // 不启用搜索结果缓存功能
+        PhraseSearcher searcher = new PhraseSearcher(false);
+        searcher.index(PhraseResource.loadPhraseText());
+        List<Document> actualValue = searcher.search("a d 视觉", 5, false).getDocuments();
+        System.out.println(actualValue);
+
+        actualValue = searcher.search("艾的视觉", 5, false).getDocuments();
+        System.out.println(actualValue);
+
+        actualValue = searcher.search("艾的", 5, false).getDocuments();
+        System.out.println(actualValue);
+
+        // 更新索引后再搜索，必须关闭缓存功能，不然会命中缓存
+        Document document = new Document(-1, "艾的");
+        searcher.updateIndex(document);
+        actualValue = searcher.search("艾的", 5, false).getDocuments();
+        System.out.println(actualValue);
 
     }
 

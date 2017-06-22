@@ -183,6 +183,11 @@ public class PhraseSearcher {
         }
     }
 
+    /**
+     * 保存文档
+     *
+     * @param documentMap
+     */
     private void saveDocument(Map<Integer, Document> documentMap) {
         String path = Search.Config.DocumentTextPath;
         try {
@@ -260,6 +265,24 @@ public class PhraseSearcher {
     }
 
     /**
+     * 删除旧索引
+     *
+     * @param documentId
+     * @return
+     */
+    private boolean deleteOldIndexIfExist(int documentId) {
+        Integer indexId = DOCUMENT_TO_INDEX.get(documentId);
+        if (indexId != null) {
+            INDEX_TO_DOCUMENT.remove(indexId);
+            DOCUMENT_TO_INDEX.remove(documentId);
+            DOCUMENT.remove(documentId);
+            logger.debug("删除文档索引，文档ID:{}", documentId);
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * 单文档索引
      *
      * @param document
@@ -306,9 +329,9 @@ public class PhraseSearcher {
      */
     public void deleteIndex(int documentId) {
         if (deleteOldIndexIfExist(documentId)) {
-            logger.debug("文档索引删除成功，ID:{}", documentId);
+            logger.debug("文档索引删除成功，文档ID:{}", documentId);
         } else {
-            logger.warn("要删除的文档索引不存在，ID:{}", documentId);
+            logger.warn("要删除的文档索引不存在，文档ID:{}", documentId);
         }
     }
 
@@ -368,18 +391,6 @@ public class PhraseSearcher {
         if (highlight) {
             document.setValue(val);
         }
-    }
-
-    private boolean deleteOldIndexIfExist(int documentId) {
-        Integer indexId = DOCUMENT_TO_INDEX.get(documentId);
-        if (indexId != null) {
-            INDEX_TO_DOCUMENT.remove(indexId);
-            DOCUMENT_TO_INDEX.remove(documentId);
-            DOCUMENT.remove(documentId);
-            logger.debug("删除文档索引，ID:{}", documentId);
-            return true;
-        }
-        return false;
     }
 
     public void clearSearchHistories() {
@@ -472,12 +483,12 @@ public class PhraseSearcher {
         searchCountEveryDay.get(key).incrementAndGet();
 
         String identity = searchCount.incrementAndGet() + "-" + SEARCH_MAX_CONCURRENT;
-        // 控制并发请求数量
+        // 1.控制并发请求数量
         if (currentProcessSearchCount.incrementAndGet() > SEARCH_MAX_CONCURRENT) {
             return handleOverload(identity);
         }
 
-        // 缓存
+        // 2.从缓存中取
         String cacheKey = keywords + "_" + topN + "_" + highlight;
         if (cacheEnabled) {
             SearchResult result = cache.get(cacheKey);
@@ -487,6 +498,7 @@ public class PhraseSearcher {
                 return result;
             }
         }
+
         SearchResult searchResult = new SearchResult();
         searchResult.setId(identity);
         if (topN > TOP_N_MAX_LENGTH) {
@@ -494,7 +506,9 @@ public class PhraseSearcher {
             topN = TOP_N_MAX_LENGTH;
         }
         logger.info("搜索关键词：{}，topN：{}，highlight：{} {}", keywords, topN, highlight, identity);
+
         long start = System.currentTimeMillis();
+        // 3.查询
         Query query = parse(keywords);
         long cost = System.currentTimeMillis() - start;
         totalSearchTime.addAndGet(cost);
@@ -509,30 +523,8 @@ public class PhraseSearcher {
         logger.info("查询结果：{} {}", query.getKeywordTerms(), identity);
 
         start = System.currentTimeMillis();
-        Map<Integer, AtomicInteger> hits = new ConcurrentHashMap<>();
-        // 收集并初始化文档分数
-        query.getKeywordTerms().parallelStream().forEach(keywordTerm -> {
-            Set<Integer> indexIds = INVERTED_INDEX.get(keywordTerm);
-            if (indexIds != null) {
-                Set<Integer> deletedIndexIds = new HashSet<>();
-                for (int indexId : indexIds) {
-                    Integer documentId = INDEX_TO_DOCUMENT.get(indexId);
-                    if (documentId == null) {
-                        deletedIndexIds.add(indexId);
-                        continue;
-                    }
-                    Document document = DOCUMENT.get(documentId);
-                    if (document != null) {
-                        hits.putIfAbsent(documentId, new AtomicInteger());
-                        hits.get(documentId).addAndGet(keywordTerm.length());
-                    } else {
-                        logger.error("没有ID是：{} 的文档 {}", documentId, identity);
-                    }
-                }
-                indexIds.removeAll(deletedIndexIds);
-            }
-        });
-        // 限制文档数
+        Map<Integer, AtomicInteger> hits = getHits(identity, query);
+        // 4.限制文档数
         int limitedDocCount = topN * 10 < 1000 ? 1000 : topN * 10;
         Map<Integer, AtomicInteger> limitedDocs = new ConcurrentHashMap<>();
         hits.entrySet().parallelStream()
@@ -549,10 +541,51 @@ public class PhraseSearcher {
                         + "限制后的搜索结果占总文档的比例：{} % {}",
                 hits.size(), DOCUMENT.size(), hits.size() / (float) DOCUMENT.size() * 100, limitedDocs.size(),
                 limitedDocs.size() / (float) DOCUMENT.size() * 100, identity);
+
         start = System.currentTimeMillis();
-        String finalKeywords = keywords.trim().toLowerCase();
+        // 5.文档评分
+        Map<Integer, Integer> scores = getScores(keywords, query, limitedDocs);
+        cost = System.currentTimeMillis() - start;
+        totalSearchTime.addAndGet(cost);
+        if (maxSearchTime.get() < cost) {
+            maxSearchTime.set(cost);
+        }
+        logger.info("{} 评分耗时：{} {}", cost, TimeUtil.getTimeDes(cost), identity);
+
+        // 6.文档排序
+        List<Document> result = sortDocuments(topN, identity, scores);
+        // 7.高亮
+        if (highlight && !TextUtil.isAllNonChinese(keywords)) {
+            start = System.currentTimeMillis();
+            highlight(result, keywords, query.getKeywordTerms());
+            cost = System.currentTimeMillis() - start;
+            totalSearchTime.addAndGet(cost);
+            if (maxSearchTime.get() < cost) {
+                maxSearchTime.set(cost);
+            }
+            logger.info("{} 高亮耗时：{} {}", TimeUtil.getTimeDes(cost), identity);
+        }
+        searchResult.setDocuments(result);
+        currentProcessSearchCount.decrementAndGet();
+        // 8.加入缓存
+        if (cacheEnabled) {
+            cache.put(cacheKey, searchResult);
+        }
+        return searchResult;
+    }
+
+    /**
+     * 取文档评分
+     *
+     * @param keywords
+     * @param query
+     * @param limitedDocs
+     * @return
+     */
+    private Map<Integer, Integer> getScores(String keywords, Query query, Map<Integer, AtomicInteger> limitedDocs) {
         // 文档得分
         Map<Integer, Integer> scores = new ConcurrentHashMap<>();
+        String finalKeywords = keywords.trim().toLowerCase();
         limitedDocs.entrySet().parallelStream().forEach(i -> {
             int documentId = i.getKey();
             int score = i.getValue().get();
@@ -581,15 +614,53 @@ public class PhraseSearcher {
             }
             scores.put(documentId, score);
         });
+        return scores;
+    }
 
-        cost = System.currentTimeMillis() - start;
-        totalSearchTime.addAndGet(cost);
-        if (maxSearchTime.get() < cost) {
-            maxSearchTime.set(cost);
-        }
-        logger.info("{} 评分耗时：{} {}", cost, TimeUtil.getTimeDes(cost), identity);
-        start = System.currentTimeMillis();
+    /**
+     * 收集并初始化文档分数
+     *
+     * @param identity
+     * @param query
+     * @return
+     */
+    private Map<Integer, AtomicInteger> getHits(String identity, Query query) {
+        Map<Integer, AtomicInteger> hits = new ConcurrentHashMap<>();
+        // 收集并初始化文档分数
+        query.getKeywordTerms().parallelStream().forEach(keywordTerm -> {
+            Set<Integer> indexIds = INVERTED_INDEX.get(keywordTerm);
+            if (indexIds != null) {
+                Set<Integer> deletedIndexIds = new HashSet<>();
+                for (int indexId : indexIds) {
+                    Integer documentId = INDEX_TO_DOCUMENT.get(indexId);
+                    if (documentId == null) {
+                        deletedIndexIds.add(indexId);
+                        continue;
+                    }
+                    Document document = DOCUMENT.get(documentId);
+                    if (document != null) {
+                        hits.putIfAbsent(documentId, new AtomicInteger());
+                        hits.get(documentId).addAndGet(keywordTerm.length());
+                    } else {
+                        logger.error("没有ID是：{} 的文档 {}", documentId, identity);
+                    }
+                }
+                indexIds.removeAll(deletedIndexIds);
+            }
+        });
+        return hits;
+    }
 
+    /**
+     * 文档排序
+     *
+     * @param topN
+     * @param identity
+     * @param scores
+     * @return
+     */
+    private List<Document> sortDocuments(int topN, String identity, Map<Integer, Integer> scores) {
+        long start = System.currentTimeMillis();
         // 排序并限制文档数
         List<Document> result = scores.entrySet().parallelStream()
                 .map(i -> {
@@ -605,29 +676,13 @@ public class PhraseSearcher {
                     return temp;
                 })
                 .limit(topN).collect(Collectors.toList());
-        cost = System.currentTimeMillis() - start;
+        long cost = System.currentTimeMillis() - start;
         totalSearchTime.addAndGet(cost);
         if (maxSearchTime.get() < cost) {
             maxSearchTime.set(cost);
         }
         logger.info("{} 排序耗时：{} {}", cost, TimeUtil.getTimeDes(cost), identity);
-        if (highlight && !TextUtil.isAllNonChinese(keywords)) {
-            // 高亮
-            start = System.currentTimeMillis();
-            highlight(result, keywords, query.getKeywordTerms());
-            cost = System.currentTimeMillis() - start;
-            totalSearchTime.addAndGet(cost);
-            if (maxSearchTime.get() < cost) {
-                maxSearchTime.set(cost);
-            }
-            logger.info("{} 高亮耗时：{} {}", TimeUtil.getTimeDes(cost), identity);
-        }
-        searchResult.setDocuments(result);
-        currentProcessSearchCount.decrementAndGet();
-        if (cacheEnabled) {
-            cache.put(cacheKey, searchResult);
-        }
-        return searchResult;
+        return result;
     }
 
     /**

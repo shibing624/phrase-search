@@ -1,16 +1,9 @@
 package org.xm.search.util;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-
 /**
  * @author XuMing
  */
 public class TextUtil {
-    /**
-     * 日志组件
-     */
-    private static Logger logger = LogManager.getLogger();
 
     public static boolean isAllNonChinese(String text) {
         for (char c : text.toCharArray()) {
@@ -86,7 +79,7 @@ public class TextUtil {
             }
         }
         if (text.length() != result.length()) {
-            logger.debug("规范化处理，(仅仅保留中英文字符和数字)。规范化之前：{}，规范化之后：{}", text, result.toString());
+            //System.out.println("规范化之后：" + result.toString());
         }
         return result.toString().toLowerCase();
     }
