@@ -60,13 +60,16 @@
 </head>
 <body onload="search();">
 <p>
-    搜索结果：<input id="topN" value="<%=topN%>" onkeyup="search();"><br/>
-    输入搜索：<input id="keywords" value="<%=keywords%>" size="80" onkeyup="search();">
+    搜索结果数：<input id="topN" value="<%=topN%>" onkeyup="search();"><br/>
+    搜索关键词：<input id="keywords" value="<%=keywords%>" size="80" onkeyup="search();">
 </p>
 
 <div id="searchResult"></div>
 <br/>
 <br/>
+<h3><a target="_blank" href="caches.jsp">查看短语搜索缓存命中情况</a></h3>
+<h3><a target="_blank" href="search-history.jsp">查看短语搜索历史记录</a></h3>
+<h3><a target="_blank" href="search-history.jsp?clear=true">清除短语搜索历史记录</a></h3>
 <br/>
 </body>
 </html>
