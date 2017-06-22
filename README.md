@@ -10,8 +10,8 @@
        unix类操作系统执行：
             chmod +x startup.sh & ./startup.sh
             
-       windows类操作系统执行：
-            ./startup.bat
+       windows类操作系统执行(双击)：
+            startup.bat
             
 3. 打开浏览器访问: http://localhost:8080/index.jsp
 4. JSON格式的API接口: http://localhost:8080/search-api.jsp?kw=%E6%B7%B1%E5%9C%B3%E8%85%BE%E8%AE%AF&topN=10&highlight=true
