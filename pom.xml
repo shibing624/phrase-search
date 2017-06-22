@@ -41,6 +41,7 @@
         <javaee-web-api.version>7.0</javaee-web-api.version>
         <log4j.version>2.7</log4j.version>
         <junit.version>4.12</junit.version>
+        <jetty.version>9.3.8.v20160314</jetty.version>
         <commons-lang.version>3.4</commons-lang.version>
     </properties>
 
@@ -102,7 +103,11 @@
                     <debug>true</debug>
                 </configuration>
             </plugin>
-
+            <plugin>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-maven-plugin</artifactId>
+                <version>${jetty.version}</version>
+            </plugin>
             <!-- 单元测试插件 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
